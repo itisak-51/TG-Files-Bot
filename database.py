@@ -7,6 +7,7 @@ Why SQLite instead of the original raw JSON files:
 - Safe under concurrent handlers (WAL mode)
 - Trivial to back up: it's one file
 """
+import secrets
 import sqlite3
 import threading
 import time
@@ -29,6 +30,14 @@ def _cursor():
             _conn.commit()
         finally:
             cur.close()
+
+
+def _ensure_column(cur, table: str, column: str, coltype: str):
+    """Idempotent 'ALTER TABLE ADD COLUMN' for upgrading DBs created by older
+    versions of this bot without needing a migration tool."""
+    cols = [r[1] for r in cur.execute(f"PRAGMA table_info({table})").fetchall()]
+    if column not in cols:
+        cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
 
 
 def init_db():
@@ -62,6 +71,25 @@ def init_db():
             key TEXT PRIMARY KEY,
             value TEXT
         )""")
+        # Every chat (group/channel) the bot has ever seen via my_chat_member
+        # updates, and whether it currently holds admin rights there. This is
+        # what lets the admin panel offer "pick a channel" menus instead of
+        # requiring admins to hunt down and paste raw chat IDs.
+        cur.execute("""CREATE TABLE IF NOT EXISTS known_chats (
+            chat_id INTEGER PRIMARY KEY,
+            title TEXT,
+            chat_type TEXT,
+            is_admin INTEGER DEFAULT 0,
+            invite_link TEXT,
+            updated_at INTEGER
+        )""")
+
+        # ---- Upgrade older DBs in place ----
+        _ensure_column(cur, "users", "first_name", "TEXT")
+        _ensure_column(cur, "users", "username", "TEXT")
+        _ensure_column(cur, "files", "file_name", "TEXT")
+        _ensure_column(cur, "files", "caption", "TEXT")
+
         # Seed owner as permanent admin
         cur.execute(
             "INSERT OR IGNORE INTO admins (user_id, added_by, added_at) VALUES (?, ?, ?)",
@@ -80,11 +108,12 @@ def init_db():
 
 # ---------------- Users ----------------
 
-def track_user(user_id: int):
+def track_user(user_id: int, first_name: str = "", username: str = ""):
     with _cursor() as cur:
         cur.execute(
-            "INSERT OR IGNORE INTO users (user_id, first_seen) VALUES (?, ?)",
-            (user_id, int(time.time())),
+            "INSERT INTO users (user_id, first_seen, first_name, username) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET first_name=excluded.first_name, username=excluded.username",
+            (user_id, int(time.time()), first_name or "", username or ""),
         )
 
 
@@ -96,6 +125,33 @@ def user_count() -> int:
 def all_user_ids() -> list:
     with _cursor() as cur:
         return [r[0] for r in cur.execute("SELECT user_id FROM users").fetchall()]
+
+
+def list_users_full() -> list:
+    """Every tracked user with name + ban status, oldest first. Row =
+    (user_id, first_name, username, is_banned)."""
+    with _cursor() as cur:
+        return cur.execute(
+            "SELECT u.user_id, u.first_name, u.username, "
+            "CASE WHEN b.user_id IS NULL THEN 0 ELSE 1 END AS is_banned "
+            "FROM users u LEFT JOIN banned b ON u.user_id = b.user_id "
+            "ORDER BY u.first_seen"
+        ).fetchall()
+
+
+def display_name(user_id: int) -> str:
+    """Best-effort human-readable label for a user_id: first name, else
+    @username, else the raw ID."""
+    with _cursor() as cur:
+        row = cur.execute("SELECT first_name, username FROM users WHERE user_id=?", (user_id,)).fetchone()
+    if not row:
+        return str(user_id)
+    first_name, username = row
+    if first_name:
+        return first_name
+    if username:
+        return "@" + username
+    return str(user_id)
 
 
 # ---------------- Bans ----------------
@@ -118,6 +174,37 @@ def unban_user(user_id: int):
 def banned_count() -> int:
     with _cursor() as cur:
         return cur.execute("SELECT COUNT(*) FROM banned").fetchone()[0]
+
+
+def list_bannable_users() -> list:
+    """Tracked users who are not banned and not admins/owner — the pool
+    shown in the 'Ban User' picker. Row = (user_id, label)."""
+    with _cursor() as cur:
+        rows = cur.execute(
+            "SELECT u.user_id, u.first_name, u.username FROM users u "
+            "WHERE u.user_id NOT IN (SELECT user_id FROM banned) "
+            "AND u.user_id NOT IN (SELECT user_id FROM admins) "
+            "ORDER BY u.first_seen DESC"
+        ).fetchall()
+    return [(r[0], _label(r[0], r[1], r[2])) for r in rows]
+
+
+def list_banned_users() -> list:
+    """Row = (user_id, label)."""
+    with _cursor() as cur:
+        rows = cur.execute(
+            "SELECT b.user_id, u.first_name, u.username FROM banned b "
+            "LEFT JOIN users u ON u.user_id = b.user_id ORDER BY b.banned_at DESC"
+        ).fetchall()
+    return [(r[0], _label(r[0], r[1], r[2])) for r in rows]
+
+
+def _label(user_id, first_name, username) -> str:
+    if first_name:
+        return f"{first_name} ({user_id})"
+    if username:
+        return f"@{username} ({user_id})"
+    return str(user_id)
 
 
 # ---------------- Admins ----------------
@@ -154,6 +241,18 @@ def list_admins() -> list:
         return [r[0] for r in cur.execute("SELECT user_id FROM admins ORDER BY added_at").fetchall()]
 
 
+def list_promotable_users() -> list:
+    """Tracked users who are not already admins — the pool shown in the
+    'Add Admin' picker. Row = (user_id, label)."""
+    with _cursor() as cur:
+        rows = cur.execute(
+            "SELECT u.user_id, u.first_name, u.username FROM users u "
+            "WHERE u.user_id NOT IN (SELECT user_id FROM admins) "
+            "ORDER BY u.first_seen DESC"
+        ).fetchall()
+    return [(r[0], _label(r[0], r[1], r[2])) for r in rows]
+
+
 # ---------------- Force-Sub Channels ----------------
 
 def add_force_sub_channel(channel_id: int, title: str, invite_link: str):
@@ -174,21 +273,60 @@ def list_force_sub_channels() -> list:
         return cur.execute("SELECT channel_id, title, invite_link FROM force_sub_channels").fetchall()
 
 
-# ---------------- Files ----------------
+def is_force_sub_channel(channel_id: int) -> bool:
+    with _cursor() as cur:
+        return cur.execute(
+            "SELECT 1 FROM force_sub_channels WHERE channel_id=?", (channel_id,)
+        ).fetchone() is not None
 
-def add_file(file_id: str, channel_msg_id: int, uploader_id: int, file_type: str):
+
+# ---------------- Known chats (bot membership tracking) ----------------
+
+def upsert_known_chat(chat_id: int, title: str, chat_type: str, is_admin_here: bool, invite_link: str):
     with _cursor() as cur:
         cur.execute(
-            "INSERT OR REPLACE INTO files (file_id, channel_msg_id, uploader_id, file_type, uploaded_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (file_id, channel_msg_id, uploader_id, file_type, int(time.time())),
+            "INSERT INTO known_chats (chat_id, title, chat_type, is_admin, invite_link, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(chat_id) DO UPDATE SET title=excluded.title, chat_type=excluded.chat_type, "
+            "is_admin=excluded.is_admin, invite_link=excluded.invite_link, updated_at=excluded.updated_at",
+            (chat_id, title, chat_type, 1 if is_admin_here else 0, invite_link, int(time.time())),
+        )
+
+
+def list_admin_known_chats() -> list:
+    """Every group/channel the bot currently has admin rights in.
+    Row = (chat_id, title, chat_type, invite_link)."""
+    with _cursor() as cur:
+        return cur.execute(
+            "SELECT chat_id, title, chat_type, invite_link FROM known_chats WHERE is_admin=1 ORDER BY title"
+        ).fetchall()
+
+
+def get_known_chat(chat_id: int):
+    with _cursor() as cur:
+        return cur.execute(
+            "SELECT chat_id, title, chat_type, invite_link FROM known_chats WHERE chat_id=?", (chat_id,)
+        ).fetchone()
+
+
+# ---------------- Files ----------------
+
+def add_file(file_id: str, channel_msg_id: int, uploader_id: int, file_type: str,
+             file_name: str = "", caption: str = ""):
+    with _cursor() as cur:
+        cur.execute(
+            "INSERT OR REPLACE INTO files "
+            "(file_id, channel_msg_id, uploader_id, file_type, file_name, caption, uploaded_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (file_id, channel_msg_id, uploader_id, file_type, file_name, caption, int(time.time())),
         )
 
 
 def get_file(file_id: str):
     with _cursor() as cur:
         return cur.execute(
-            "SELECT file_id, channel_msg_id, uploader_id, file_type, uploaded_at FROM files WHERE file_id=?",
+            "SELECT file_id, channel_msg_id, uploader_id, file_type, file_name, caption, uploaded_at "
+            "FROM files WHERE file_id=?",
             (file_id,),
         ).fetchone()
 
@@ -199,6 +337,28 @@ def delete_file(file_id: str) -> bool:
         return cur.rowcount > 0
 
 
+def regenerate_file_id(old_file_id: str):
+    """Issues a brand-new share link for the same stored file, and retires
+    the old one (its link stops working). Returns the new file_id, or None
+    if old_file_id doesn't exist."""
+    with _cursor() as cur:
+        row = cur.execute(
+            "SELECT channel_msg_id, uploader_id, file_type, file_name, caption FROM files WHERE file_id=?",
+            (old_file_id,),
+        ).fetchone()
+        if not row:
+            return None
+        channel_msg_id, uploader_id, file_type, file_name, caption = row
+        new_id = f"{channel_msg_id}{secrets.token_hex(3)}"
+        cur.execute("DELETE FROM files WHERE file_id=?", (old_file_id,))
+        cur.execute(
+            "INSERT INTO files (file_id, channel_msg_id, uploader_id, file_type, file_name, caption, uploaded_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (new_id, channel_msg_id, uploader_id, file_type, file_name, caption, int(time.time())),
+        )
+        return new_id
+
+
 def clear_files():
     with _cursor() as cur:
         cur.execute("DELETE FROM files")
@@ -207,6 +367,14 @@ def clear_files():
 def file_count() -> int:
     with _cursor() as cur:
         return cur.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+
+
+def list_all_files() -> list:
+    """Row = (file_id, file_type, file_name, uploaded_at), newest first."""
+    with _cursor() as cur:
+        return cur.execute(
+            "SELECT file_id, file_type, file_name, uploaded_at FROM files ORDER BY uploaded_at DESC"
+        ).fetchall()
 
 
 def recent_files(limit: int = 10) -> list:

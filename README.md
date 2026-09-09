@@ -2,15 +2,19 @@
 
 A secure, advanced file-store & delivery bot with:
 
-- 📤 Store any file (document/video/photo/audio), get a shareable deep link
-- 🔐 **Multiple** force-subscribe channels (users must join all of them)
-- 🛡 **Multiple** admins, with a protected, un-removable owner
+- 📤 Store any file kind (document/video/photo/audio/voice/GIF/sticker) with its caption, get a shareable deep link
+- 🔗 Deep links show **only** a status message → the file → a timer message — nothing else
+- 🔐 **Multiple** force-subscribe channels/groups — auto-detected from wherever the bot is admin, tap to add/remove
+- 🛡 **Multiple** admins, with a protected, un-removable owner — add/remove by tapping a name, no typing IDs
 - 🛠 Full interactive admin panel — everything is button-driven, no code edits needed
-- ⏱ Configurable auto-delete timer on delivered files, with a live countdown bar
-- 🚫 Ban / unban users, 📢 broadcast to all users, 📥 export user ID list
+- ⏱ 5-minute auto-delete timer by default (configurable) on delivered files, with a live countdown bar and an explicit "don't forward" warning
+- 🚫 Ban / unban users by tapping a name, 📢 broadcast to all users, 📥 export the user list (name + status) to a `.txt`
+- 🗄 Files Management — browse stored files **by filename**, get a link, remove a file (also deletes it from the storage channel), or reissue its link ID
 - 💾 SQLite database (reliable, atomic, single-file, easy to back up)
 - 🔁 Two-layer auto-restart (in-process backoff loop + systemd `Restart=always`)
 - 🔒 No secrets in code — everything sensitive lives in `.env`
+
+> **Note on auto-detected channels:** Telegram's Bot API has no "list every chat I'm in" endpoint. The bot learns which channels/groups it administers by listening for membership-change events — so it detects a channel automatically the moment it's *promoted to admin there while running*. If it was already admin somewhere before this feature was deployed, just demote and re-promote it once (or remove and re-add it) to trigger detection — or use the "Enter Manually" fallback that's still available in every channel-picker screen.
 
 ---
 

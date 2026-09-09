@@ -36,5 +36,5 @@ DEFAULT_WELCOME_MSG = (
     "I store files securely and hand out shareable links.\n\n"
     "👇 Use the menu below to get started."
 )
-DEFAULT_AUTO_DELETE_SECONDS = 60
+DEFAULT_AUTO_DELETE_SECONDS = 300  # 5 minutes
 DEFAULT_PROTECT_CONTENT = "0"  # "1" = forwarding/saving disabled on delivered files

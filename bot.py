@@ -18,6 +18,7 @@ from telegram import Update
 from telegram.error import TelegramError
 from telegram.ext import (
     Application,
+    ChatMemberHandler,
     CommandHandler,
     CallbackQueryHandler,
     MessageHandler,
@@ -32,6 +33,7 @@ from handlers.text_input import text_handler
 from handlers.upload import handle_file_upload
 from handlers.admin_commands import setstorage_command, checkstorage_command
 from handlers.commands_setup import apply_default_commands, sync_all_admin_commands
+from handlers.chat_tracking import track_my_chat_member
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -64,8 +66,16 @@ def build_app() -> Application:
     app.add_handler(CallbackQueryHandler(button_router))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_handler(
-        MessageHandler(filters.Document.ALL | filters.VIDEO | filters.PHOTO | filters.AUDIO, handle_file_upload)
+        MessageHandler(
+            filters.Document.ALL | filters.VIDEO | filters.PHOTO | filters.AUDIO
+            | filters.ANIMATION | filters.VOICE | filters.VIDEO_NOTE | filters.Sticker.ALL,
+            handle_file_upload,
+        )
     )
+    # Fires on every add/remove/promote/demote of the bot itself anywhere —
+    # this is how we learn which channels/groups the bot administers, for
+    # the Storage Channel and Force-Sub "pick a channel" menus.
+    app.add_handler(ChatMemberHandler(track_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_error_handler(on_error)
     return app
 
