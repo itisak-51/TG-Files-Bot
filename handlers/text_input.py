@@ -3,7 +3,6 @@ from telegram.ext import ContextTypes
 
 import database as db
 import keyboards as kb
-from handlers.commands_setup import apply_admin_commands
 
 
 def _forwarded_channel_id(message):
@@ -33,7 +32,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if text.lstrip("-").isdigit() and len(text.lstrip("-")) >= 6:
             await message.reply_text(
                 "ℹ️ That looks like a channel ID, but I'm not currently waiting for one.\n\n"
-                "Open /admin → ⚙️ Settings → 🔒 Storage Channel (or 🔐 Force-Sub Channels) "
+                "Open /admin → ⚙️ Settings → 🔒 Storage Channel (or 🔐 Force Channel Subscription) "
                 "first, *then* send the ID — or just run /setstorage <id> directly.",
             )
         return
@@ -54,7 +53,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         elif state == "AWAITING_WELCOME":
             db.set_setting("welcome_msg", text)
-            await message.reply_text("✅ Welcome message updated!", parse_mode="HTML")
+            await message.reply_text("✅ Welcome message updated!", parse_mode="HTML",
+                                      reply_markup=kb.welcome_edit_kb())
 
         elif state == "AWAITING_AUTODELETE":
             if not text.isdigit():
@@ -73,34 +73,12 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     success += 1
                 except Exception:
                     pass
-            await message.reply_text(f"✅ Broadcast complete! Delivered to {success}/{len(ids)} users.")
+            await message.reply_text(
+                f"✅ Message Broadcasted to {success}/{len(ids)} Users",
+                reply_markup=kb.admin_main_kb(),
+            )
 
-        elif state == "AWAITING_BAN_USER":
-            if not text.isdigit():
-                await message.reply_text("❌ Send a valid numeric user ID.")
-                return
-            uid = int(text)
-            db.ban_user(uid)
-            await message.reply_text(f"✅ User <code>{uid}</code> banned!", parse_mode="HTML")
-
-        elif state == "AWAITING_UNBAN_USER":
-            if not text.isdigit():
-                await message.reply_text("❌ Send a valid numeric user ID.")
-                return
-            uid = int(text)
-            db.unban_user(uid)
-            await message.reply_text(f"✅ User <code>{uid}</code> unbanned!", parse_mode="HTML")
-
-        elif state == "AWAITING_ADD_ADMIN":
-            if not text.isdigit():
-                await message.reply_text("❌ Send a valid numeric user ID.")
-                return
-            uid = int(text)
-            db.add_admin(uid, added_by=user.id)
-            await apply_admin_commands(context.bot, uid)
-            await message.reply_text(f"✅ User <code>{uid}</code> added as admin!", parse_mode="HTML")
-
-        elif state == "AWAITING_ADD_FORCESUB":
+        elif state == "AWAITING_ADD_FORCESUB_MANUAL":
             parts = [p.strip() for p in text.split("|")]
             if len(parts) < 1 or not parts[0].lstrip("-").isdigit():
                 await message.reply_text(
@@ -112,13 +90,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             link = parts[2] if len(parts) > 2 else ""
             db.add_force_sub_channel(channel_id, title, link)
             await message.reply_text(f"✅ Force-Sub channel <code>{channel_id}</code> added!", parse_mode="HTML")
-
-        elif state == "AWAITING_DELETE_FILE":
-            deleted = db.delete_file(text)
-            if deleted:
-                await message.reply_text(f"✅ File <code>{text}</code> deleted from database!", parse_mode="HTML")
-            else:
-                await message.reply_text("❌ File ID not found.")
 
         context.user_data.pop("state", None)
 

@@ -1,6 +1,10 @@
 """
 Everything to do with: checking force-subscribe status, delivering a stored
 file to a user, and running the live auto-delete countdown afterwards.
+
+Deep-link delivery is intentionally minimal: a status message, then the
+file (with its original caption, untouched), then a separate timer message.
+Nothing else gets attached to that flow.
 """
 import asyncio
 import logging
@@ -35,7 +39,7 @@ async def prompt_join(update_or_query, file_id: str, is_callback: bool):
     channels = db.list_force_sub_channels()
     text = (
         "⚠️ <b>Subscription Required</b>\n\n"
-        "Please join the channel(s) below, then tap <b>Check Again</b> to unlock this file."
+        "Please join the channel(s)/group(s) below, then tap <b>Check Again</b> to unlock this file."
     )
     markup = kb.force_sub_kb(channels, file_id)
     if is_callback:
@@ -55,7 +59,7 @@ async def deliver_file(context, chat_target, user_id: int, file_id: str, edit_st
             await chat_target.reply_text(text)
         return
 
-    _fid, channel_msg_id, _uploader, _ftype, _uploaded_at = row
+    _fid, channel_msg_id, _uploader, _ftype, _fname, _caption, _uploaded_at = row
     storage_channel_id = db.get_setting("storage_channel_id")
     if not storage_channel_id:
         text = "❌ Storage channel is not configured yet. Ask an admin to set it up."
@@ -76,6 +80,9 @@ async def deliver_file(context, chat_target, user_id: int, file_id: str, edit_st
     protect = db.get_setting("protect_content", "0") == "1"
 
     try:
+        # copy_message (not forward) so the delivered file carries its
+        # original caption but no "forwarded from" trail, and works
+        # regardless of the uploader's forward-privacy settings.
         sent_file = await context.bot.copy_message(
             chat_id=user_id,
             from_chat_id=int(storage_channel_id),
@@ -88,13 +95,14 @@ async def deliver_file(context, chat_target, user_id: int, file_id: str, edit_st
         await context.bot.edit_message_text(chat_id=user_id, message_id=status_msg_id, text=fail_text)
         return
 
-    auto_delete_seconds = int(db.get_setting("auto_delete_seconds", "60") or 0)
+    auto_delete_seconds = int(db.get_setting("auto_delete_seconds", "300") or 0)
 
     if auto_delete_seconds > 0:
         timer_msg = await context.bot.send_message(
             user_id,
             f"⏳ <b>{auto_delete_seconds}s</b> remaining\n\n"
-            "⚠️ <i>This file will auto-delete for copyright protection. Save it now.</i>",
+            "⚠️ <b>Do not forward this file anywhere else.</b> "
+            "It will auto-delete for copyright protection — save it now.",
             parse_mode="HTML",
         )
         success_text = "✅ <b>Success!</b> Your file is above.\n⏳ Auto-delete timer started."
@@ -123,7 +131,7 @@ async def run_countdown(context, chat_id: int, timer_msg_id: int, file_msg_id: i
         filled = int((seconds_left / total_seconds) * bar_length)
         filled = max(0, min(bar_length, filled))
         bar = "█" * filled + "░" * (bar_length - filled)
-        text = f"{emoji} | {bar} <b>{seconds_left}s</b>"
+        text = f"{emoji} | {bar} <b>{seconds_left}s</b>\n\n⚠️ <i>Do not forward this file anywhere else.</i>"
         try:
             await context.bot.edit_message_text(chat_id=chat_id, message_id=timer_msg_id, text=text, parse_mode="HTML")
         except Exception:

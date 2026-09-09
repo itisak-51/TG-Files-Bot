@@ -12,13 +12,13 @@ from telegram import BotCommand, BotCommandScopeChat, BotCommandScopeDefault
 PUBLIC_COMMANDS = [
     BotCommand("start", "Open the main menu"),
     BotCommand("help", "How this bot works"),
-    BotCommand("cancel", "Cancel whatever it's waiting on"),
 ]
 
+# Admins see exactly one extra command in the "/" picker: /admin.
+# /setstorage, /checkstorage and /cancel still work when typed — they're
+# just left out of the menu to keep it to the third command, per spec.
 ADMIN_COMMANDS = PUBLIC_COMMANDS + [
-    BotCommand("admin", "Open the admin panel"),
-    BotCommand("setstorage", "Set the storage channel by ID"),
-    BotCommand("checkstorage", "Diagnose the storage channel"),
+    BotCommand("admin", "Open the admin panel (admins only)"),
 ]
 
 
