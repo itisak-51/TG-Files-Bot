@@ -7,7 +7,9 @@ Why SQLite instead of the original raw JSON files:
 - Safe under concurrent handlers (WAL mode)
 - Trivial to back up: it's one file
 """
+import os
 import secrets
+import shutil
 import sqlite3
 import threading
 import time
@@ -97,13 +99,24 @@ def init_db():
         )
         # Seed default settings if not present
         defaults = {
-            "welcome_msg": config.DEFAULT_WELCOME_MSG,
             "auto_delete_seconds": str(config.DEFAULT_AUTO_DELETE_SECONDS),
             "protect_content": config.DEFAULT_PROTECT_CONTENT,
             "storage_channel_id": "",
         }
         for k, v in defaults.items():
             cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
+
+        # Migrate the old single hardcoded welcome_msg setting (pre Edit-Mode) into
+        # the generic editable-text store, if present and not already migrated.
+        legacy_welcome = cur.execute("SELECT value FROM settings WHERE key='welcome_msg'").fetchone()
+        has_new_welcome = cur.execute("SELECT 1 FROM settings WHERE key='text_welcome'").fetchone()
+        if legacy_welcome and not has_new_welcome:
+            cur.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('text_welcome', ?)", (legacy_welcome[0],))
+
+        # Seed every editable text with its default if it has no value yet
+        import texts as _texts
+        for key, (_label, default_val) in _texts.EDITABLE_TEXTS.items():
+            cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (f"text_{key}", default_val))
 
 
 # ---------------- Users ----------------
@@ -396,3 +409,95 @@ def get_setting(key: str, default: str = "") -> str:
 def set_setting(key: str, value: str):
     with _cursor() as cur:
         cur.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+
+
+# ---------------- Editable texts (Settings -> Edit Mode) ----------------
+
+def get_text(key: str) -> str:
+    import texts as _texts
+    return get_setting(f"text_{key}", _texts.default_text(key))
+
+
+def set_text(key: str, value: str):
+    set_setting(f"text_{key}", value)
+
+
+# ---------------- Known chats: full listing for live re-verification ----------------
+
+def all_known_chat_ids() -> list:
+    with _cursor() as cur:
+        return [r[0] for r in cur.execute("SELECT chat_id FROM known_chats").fetchall()]
+
+
+# ---------------- Backup / Restore / Destroy ----------------
+# Everything this bot stores locally is metadata + pointers (which channel a
+# file lives in, whose files those are, which channels are mandatory, which
+# settings are configured) — never the file bytes themselves, since those
+# stay on Telegram inside the storage channel. Backing up this DB is
+# therefore a complete, self-contained snapshot of "where everything is and
+# how the bot is configured."
+
+REQUIRED_BACKUP_TABLES = (
+    "users", "admins", "banned", "files", "settings", "force_sub_channels", "known_chats",
+)
+
+
+def create_backup(dest_path: str):
+    """Writes a consistent point-in-time snapshot of the whole DB to dest_path."""
+    with _lock:
+        dest = sqlite3.connect(dest_path)
+        try:
+            _conn.backup(dest)
+        finally:
+            dest.close()
+
+
+def is_valid_backup_file(path: str) -> bool:
+    try:
+        test = sqlite3.connect(path)
+        try:
+            tables = {r[0] for r in test.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        finally:
+            test.close()
+        return all(t in tables for t in REQUIRED_BACKUP_TABLES)
+    except Exception:
+        return False
+
+
+def restore_from(path: str) -> bool:
+    """Swaps the live DB for the one at `path`. A safety copy of the DB being
+    replaced is kept alongside it (config.DB_PATH + '.before_restore') in
+    case something goes wrong. Returns False (no changes made) if `path`
+    doesn't look like a bot backup."""
+    global _conn
+    if not is_valid_backup_file(path):
+        return False
+    with _lock:
+        _conn.close()
+        for suffix in ("-wal", "-shm"):
+            try:
+                os.remove(config.DB_PATH + suffix)
+            except FileNotFoundError:
+                pass
+        try:
+            shutil.copy2(config.DB_PATH, config.DB_PATH + ".before_restore")
+        except FileNotFoundError:
+            pass
+        shutil.copy2(path, config.DB_PATH)
+        _conn = sqlite3.connect(config.DB_PATH, check_same_thread=False)
+        _conn.execute("PRAGMA journal_mode=WAL;")
+        _conn.row_factory = sqlite3.Row
+    init_db()  # idempotent: re-applies migrations/defaults on whatever was just restored
+    return True
+
+
+def destroy_all_local_data():
+    """Wipes every table back to a fresh-install state (owner re-seeded as
+    the sole admin, default settings/texts restored). Does NOT by itself
+    touch the actual messages sitting in the storage channel on Telegram —
+    callers that also want those deleted should do it via the bot API
+    before calling this, using the file rows this returns."""
+    with _cursor() as cur:
+        for table in ("users", "admins", "banned", "files", "force_sub_channels", "known_chats", "settings"):
+            cur.execute(f"DELETE FROM {table}")
+    init_db()

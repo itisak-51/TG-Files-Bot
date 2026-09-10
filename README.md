@@ -2,19 +2,24 @@
 
 A secure, advanced file-store & delivery bot with:
 
+- 📥 **Receive-only for regular users** — they can only download via shared links; uploading is admin/owner-only
+- ✅ **Force-subscribe re-check** — every `/start` (with or without a link) is gated; the prompt only ever shows channels the user *hasn't* joined yet, narrowing down as they join, and it's re-checked fresh every single time (never cached)
+- ⌨️ **Bottom reply-keyboard navigation** for admins (Root → Admin Panel → Settings/Users/Admins/Files/Backup, Force-Sub nested under Settings) alongside inline keyboards for dynamic pick-lists, toggles, and confirmations — every submenu has a Back button
+- 🔎 **Live admin-channel detection** — passive tracking via Telegram's membership events, *plus* active verify-on-demand (the moment you forward a message or type an ID, it's checked live and cached) and a 🔄 Refresh button that re-verifies everything already known
 - 📤 Store any file kind (document/video/photo/audio/voice/GIF/sticker) with its caption, get a shareable deep link
 - 🔗 Deep links show **only** a status message → the file → a timer message — nothing else
-- 🔐 **Multiple** force-subscribe channels/groups — auto-detected from wherever the bot is admin, tap to add/remove
+- 🔐 **Multiple** force-subscribe channels/groups — pick from bot-admin channels, tap to add/remove
 - 🛡 **Multiple** admins, with a protected, un-removable owner — add/remove by tapping a name, no typing IDs
-- 🛠 Full interactive admin panel — everything is button-driven, no code edits needed
-- ⏱ 5-minute auto-delete timer by default (configurable) on delivered files, with a live countdown bar and an explicit "don't forward" warning
+- ⏱ 5-minute auto-delete timer by default (configurable), live countdown bar, and a "don't forward" warning that **only shows when Content Protection is OFF** (when it's ON, Telegram itself already blocks forwarding, so the warning is skipped)
 - 🚫 Ban / unban users by tapping a name, 📢 broadcast to all users, 📥 export the user list (name + status) to a `.txt`
 - 🗄 Files Management — browse stored files **by filename**, get a link, remove a file (also deletes it from the storage channel), or reissue its link ID
+- 💾 **Backup / Restore / Destroy** — Backup Data snapshots all metadata + config (never the file bytes — those stay on Telegram) as a downloadable `.db`; Restore Data loads a backup back in, picking up exactly where it left off, even on a brand-new host; Destroy Data wipes everything (including deleting the actual messages from the storage channel) back to a fresh install
+- 🎛 **Edit Mode** — welcome message, help/about text, warnings, and prompts are all editable live from Settings, not hardcoded
 - 💾 SQLite database (reliable, atomic, single-file, easy to back up)
 - 🔁 Two-layer auto-restart (in-process backoff loop + systemd `Restart=always`)
 - 🔒 No secrets in code — everything sensitive lives in `.env`
 
-> **Note on auto-detected channels:** Telegram's Bot API has no "list every chat I'm in" endpoint. The bot learns which channels/groups it administers by listening for membership-change events — so it detects a channel automatically the moment it's *promoted to admin there while running*. If it was already admin somewhere before this feature was deployed, just demote and re-promote it once (or remove and re-add it) to trigger detection — or use the "Enter Manually" fallback that's still available in every channel-picker screen.
+> **Note on auto-detected channels:** Telegram's Bot API has no "list every chat I'm in" endpoint. The bot learns which channels/groups it administers two ways: passively, the moment it's promoted/demoted anywhere while running; and actively, the instant you point it at a chat by forwarding a message or typing an ID — that chat gets verified live and remembered from then on. If a channel doesn't show up in a picker yet, forward one message from it (or use 🔄 Refresh Detected Channels) and it'll appear immediately.
 
 ---
 

@@ -30,11 +30,5 @@ if not OWNER_ID_RAW.isdigit():
 OWNER_ID = int(OWNER_ID_RAW)
 
 # Default settings written into the DB on first run (editable live via /admin after that)
-DEFAULT_WELCOME_MSG = (
-    "👋 Hey {name}!\n\n"
-    "Welcome to <b>Premium File Store</b> 📂\n"
-    "I store files securely and hand out shareable links.\n\n"
-    "👇 Use the menu below to get started."
-)
 DEFAULT_AUTO_DELETE_SECONDS = 300  # 5 minutes
 DEFAULT_PROTECT_CONTENT = "0"  # "1" = forwarding/saving disabled on delivered files
