@@ -1,65 +1,52 @@
-from telegram import Update
+from telegram import ReplyKeyboardRemove, Update
 from telegram.ext import ContextTypes
 
 import database as db
 import keyboards as kb
-from handlers.delivery import is_user_subscribed, prompt_join, deliver_file
-
-HELP_TEXT = (
-    "❓ <b>How This Bot Works</b>\n\n"
-    "1️⃣ Send me any file (document, video, photo, audio, voice, or GIF) — I'll store it securely.\n"
-    "2️⃣ I hand you back a shareable link.\n"
-    "3️⃣ Anyone who opens the link must join the required channel(s)/group(s) first.\n"
-    "4️⃣ Delivered files auto-delete after a timer — please don't forward them elsewhere.\n\n"
-    "<b>Commands:</b>\n"
-    "/start — open the main menu\n"
-    "/help — show this message"
-)
-
-HELP_TEXT_ADMIN_NOTE = (
-    "\n\n<b>Admin-only commands:</b>\n"
-    "/admin — open the admin panel\n"
-    "/setstorage &lt;id&gt; — directly set the storage channel\n"
-    "/checkstorage — diagnose why the storage channel isn't working\n"
-    "/cancel — cancel whatever you're currently typing for the bot"
-)
-
-ABOUT_TEXT = (
-    "ℹ️ <b>About This Bot</b>\n\n"
-    "A secure file-store &amp; delivery bot with force-subscribe gating, "
-    "multi-admin management, and automatic copyright-safe deletion."
-)
+import nav
+from handlers.delivery import get_unjoined_channels, prompt_join, deliver_file
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if db.is_banned(user.id):
-        await update.message.reply_text("⛔ You are banned from using this bot.")
+        await update.message.reply_text(db.get_text("banned_notice"), parse_mode="HTML")
         return
 
     db.track_user(user.id, user.first_name or "", user.username or "")
     args = context.args
+    file_id = args[0] if args else None
+    is_admin = db.is_admin(user.id)
 
-    if args:
+    # Admins/owner manage the force-sub channels themselves, so they're
+    # exempt from the gate — everyone else is checked fresh, every time.
+    if not is_admin:
+        unjoined = await get_unjoined_channels(context, user.id)
+        if unjoined:
+            continue_data = f"checksubfile_{file_id}" if file_id else "checksubstart"
+            await prompt_join(update.message, unjoined, continue_data, is_callback=False)
+            return
+
+    if file_id:
         # Deep-link file request: show ONLY status -> file -> timer.
         # No welcome text, no menus, nothing else gets attached to this flow.
-        file_id = args[0]
-        if await is_user_subscribed(context, user.id):
-            await deliver_file(context, update.message, user.id, file_id, edit_status=False)
-        else:
-            await prompt_join(update.message, file_id, is_callback=False)
+        await deliver_file(context, update.message, user.id, file_id, edit_status=False)
         return
 
-    welcome = db.get_setting("welcome_msg").format(name=user.first_name)
-    await update.message.reply_text(welcome, reply_markup=kb.main_menu_kb(user.id), parse_mode="HTML")
+    if is_admin:
+        context.user_data["level"] = "root"
+        welcome = db.get_text("welcome").format(name=user.first_name)
+        await update.message.reply_text(welcome, reply_markup=nav.reply_kb("root"), parse_mode="HTML")
+    else:
+        # Pure receive-only experience: no menus, no upload access.
+        welcome = db.get_text("welcome").format(name=user.first_name)
+        await update.message.reply_text(
+            welcome, reply_markup=ReplyKeyboardRemove(), parse_mode="HTML",
+        )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    text = HELP_TEXT
-    if db.is_admin(user.id):
-        text += HELP_TEXT_ADMIN_NOTE
-    await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb.home_kb())
+    await update.message.reply_text(db.get_text("help"), parse_mode="HTML")
 
 
 async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -72,7 +59,7 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not db.is_admin(user.id):
         await update.message.reply_text("⛔ You are not authorized to use this command.")
         return
+    context.user_data["level"] = "admin"
     await update.message.reply_text(
-        "🛠 <b>Admin Panel</b>\n\nManage your bot live — no restarts needed.",
-        reply_markup=kb.admin_main_kb(), parse_mode="HTML",
+        nav.LEVEL_ARRIVAL_TEXT["admin"], reply_markup=nav.reply_kb("admin"), parse_mode="HTML",
     )

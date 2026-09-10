@@ -1,10 +1,15 @@
 """
-Everything to do with: checking force-subscribe status, delivering a stored
-file to a user, and running the live auto-delete countdown afterwards.
+Everything to do with: checking force-subscribe status (showing only the
+channels a user still hasn't joined — never the full list once some are
+already done), delivering a stored file, and running the live auto-delete
+countdown afterwards.
 
 Deep-link delivery is intentionally minimal: a status message, then the
-file (with its original caption, untouched), then a separate timer message.
-Nothing else gets attached to that flow.
+file (with its original caption, untouched unless a brand label is set),
+then a separate timer message. Nothing else gets attached to that flow.
+Subscription is re-checked from scratch every single time — nothing about
+a past pass is ever cached, so a user who leaves a channel later is caught
+again next time.
 """
 import asyncio
 import logging
@@ -17,35 +22,37 @@ import keyboards as kb
 logger = logging.getLogger(__name__)
 
 
-async def is_user_subscribed(context, user_id: int) -> bool:
-    """True only if the user is a member of every configured force-sub channel.
-    If no channels are configured, everyone passes."""
+async def get_unjoined_channels(context, user_id: int) -> list:
+    """Live-checks membership against every configured force-sub channel and
+    returns only the ones the user hasn't joined. Empty list = fully
+    subscribed. Never cached — always a fresh check."""
     channels = db.list_force_sub_channels()
-    if not channels:
-        return True
-
-    for channel_id, _title, _link in channels:
+    unjoined = []
+    for channel_id, title, link in channels:
         try:
             member = await context.bot.get_chat_member(channel_id, user_id)
             if member.status in ("left", "kicked"):
-                return False
+                unjoined.append((channel_id, title, link))
         except Exception as e:
             logger.warning("Sub check failed for channel %s / user %s: %s", channel_id, user_id, e)
-            return False
-    return True
+            unjoined.append((channel_id, title, link))
+    return unjoined
 
 
-async def prompt_join(update_or_query, file_id: str, is_callback: bool):
-    channels = db.list_force_sub_channels()
-    text = (
-        "⚠️ <b>Subscription Required</b>\n\n"
-        "Please join the channel(s)/group(s) below, then tap <b>Check Again</b> to unlock this file."
-    )
-    markup = kb.force_sub_kb(channels, file_id)
+async def is_user_subscribed(context, user_id: int) -> bool:
+    return not await get_unjoined_channels(context, user_id)
+
+
+async def prompt_join(target, unjoined_channels: list, continue_data: str, is_callback: bool):
+    """Shows ONLY the channels still not joined — if the admin has 2
+    channels configured and the user joined 1, only the remaining 1 is
+    shown here, both in the button list and implicitly in the message."""
+    text = db.get_text("forcesub_prompt")
+    markup = kb.force_sub_kb(unjoined_channels, continue_data)
     if is_callback:
-        await update_or_query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
+        await target.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
     else:
-        await update_or_query.reply_text(text, reply_markup=markup, parse_mode="HTML")
+        await target.reply_text(text, reply_markup=markup, parse_mode="HTML")
 
 
 async def deliver_file(context, chat_target, user_id: int, file_id: str, edit_status: bool):
@@ -59,7 +66,7 @@ async def deliver_file(context, chat_target, user_id: int, file_id: str, edit_st
             await chat_target.reply_text(text)
         return
 
-    _fid, channel_msg_id, _uploader, _ftype, _fname, _caption, _uploaded_at = row
+    _fid, channel_msg_id, _uploader, _ftype, _fname, caption, _uploaded_at = row
     storage_channel_id = db.get_setting("storage_channel_id")
     if not storage_channel_id:
         text = "❌ Storage channel is not configured yet. Ask an admin to set it up."
@@ -69,15 +76,21 @@ async def deliver_file(context, chat_target, user_id: int, file_id: str, edit_st
             await chat_target.reply_text(text)
         return
 
-    status_text = "⏳ <b>Fetching your file from the secure vault...</b>"
+    status_text = db.get_text("fetching")
     if edit_status:
-        status_msg = await chat_target.edit_message_text(status_text, parse_mode="HTML")
+        await chat_target.edit_message_text(status_text, parse_mode="HTML")
         status_msg_id = chat_target.message.message_id
     else:
         status_msg = await chat_target.reply_text(status_text, parse_mode="HTML")
         status_msg_id = status_msg.message_id
 
     protect = db.get_setting("protect_content", "0") == "1"
+    brand_label = db.get_text("brand_label").strip()
+
+    caption_kwargs = {}
+    if brand_label:
+        new_caption = f"{brand_label}\n\n{caption}" if caption else brand_label
+        caption_kwargs["caption"] = new_caption
 
     try:
         # copy_message (not forward) so the delivered file carries its
@@ -88,6 +101,7 @@ async def deliver_file(context, chat_target, user_id: int, file_id: str, edit_st
             from_chat_id=int(storage_channel_id),
             message_id=channel_msg_id,
             protect_content=protect,
+            **caption_kwargs,
         )
     except (BadRequest, Forbidden) as e:
         logger.error("Delivery failed for file %s to user %s: %s", file_id, user_id, e)
@@ -98,17 +112,16 @@ async def deliver_file(context, chat_target, user_id: int, file_id: str, edit_st
     auto_delete_seconds = int(db.get_setting("auto_delete_seconds", "300") or 0)
 
     if auto_delete_seconds > 0:
-        timer_msg = await context.bot.send_message(
-            user_id,
-            f"⏳ <b>{auto_delete_seconds}s</b> remaining\n\n"
-            "⚠️ <b>Do not forward this file anywhere else.</b> "
-            "It will auto-delete for copyright protection — save it now.",
-            parse_mode="HTML",
-        )
-        success_text = "✅ <b>Success!</b> Your file is above.\n⏳ Auto-delete timer started."
+        timer_text = f"⏳ <b>{auto_delete_seconds}s</b> remaining"
+        if not protect:
+            # Telegram's own protect_content already blocks forwarding when
+            # ON, so the explicit warning only needs to show when it's OFF.
+            timer_text += f"\n\n{db.get_text('no_forward_warning')}"
+        timer_msg = await context.bot.send_message(user_id, timer_text, parse_mode="HTML")
+        success_text = f"{db.get_text('delivered')}\n⏳ Auto-delete timer started."
     else:
         timer_msg = None
-        success_text = "✅ <b>Success!</b> Your file is above."
+        success_text = db.get_text("delivered")
 
     await context.bot.edit_message_text(
         chat_id=user_id, message_id=status_msg_id, text=success_text,
@@ -117,21 +130,21 @@ async def deliver_file(context, chat_target, user_id: int, file_id: str, edit_st
 
     if timer_msg:
         asyncio.create_task(
-            run_countdown(context, user_id, timer_msg.message_id, sent_file.message_id, auto_delete_seconds)
+            run_countdown(context, user_id, timer_msg.message_id, sent_file.message_id, auto_delete_seconds, protect)
         )
 
 
-async def run_countdown(context, chat_id: int, timer_msg_id: int, file_msg_id: int, total_seconds: int):
+async def run_countdown(context, chat_id: int, timer_msg_id: int, file_msg_id: int,
+                         total_seconds: int, protect: bool):
     bar_length = 20
-    # Update roughly once per second, but cap update frequency for very long timers
-    step = max(1, total_seconds // 60)
+    step = max(1, total_seconds // 60)  # cap update frequency for very long timers
+    warning_line = "" if protect else f"\n\n{db.get_text('no_forward_warning')}"
 
     for seconds_left in range(total_seconds, 0, -step):
         emoji = "⏳" if seconds_left > total_seconds * 0.3 else ("⚠️" if seconds_left > total_seconds * 0.1 else "🔴")
-        filled = int((seconds_left / total_seconds) * bar_length)
-        filled = max(0, min(bar_length, filled))
+        filled = max(0, min(bar_length, int((seconds_left / total_seconds) * bar_length)))
         bar = "█" * filled + "░" * (bar_length - filled)
-        text = f"{emoji} | {bar} <b>{seconds_left}s</b>\n\n⚠️ <i>Do not forward this file anywhere else.</i>"
+        text = f"{emoji} | {bar} <b>{seconds_left}s</b>{warning_line}"
         try:
             await context.bot.edit_message_text(chat_id=chat_id, message_id=timer_msg_id, text=text, parse_mode="HTML")
         except Exception:
@@ -142,7 +155,7 @@ async def run_countdown(context, chat_id: int, timer_msg_id: int, file_msg_id: i
         await context.bot.delete_message(chat_id=chat_id, message_id=file_msg_id)
         await context.bot.edit_message_text(
             chat_id=chat_id, message_id=timer_msg_id,
-            text="🗑 <b>Deleted</b>\n\nThe file was removed for copyright protection.",
+            text=f"🗑 <b>Deleted</b>\n\n{db.get_text('auto_deleted')}",
             parse_mode="HTML",
         )
     except Exception:

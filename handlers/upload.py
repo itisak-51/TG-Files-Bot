@@ -1,10 +1,11 @@
 import asyncio
 import secrets
 
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update
 from telegram.ext import ContextTypes
 
 import database as db
+import keyboards as kb
 
 
 def _detect_type(message) -> str:
@@ -56,18 +57,29 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user = message.from_user
 
     if db.is_banned(user.id):
-        await message.reply_text("⛔ You are banned from using this bot.")
+        await message.reply_text(db.get_text("banned_notice"), parse_mode="HTML")
+        return
+
+    db.track_user(user.id, user.first_name or "", user.username or "")
+
+    # A document sent while "Restore Data" is pending is backup data, not a
+    # file to store — hand it off instead of treating it as an upload.
+    if context.user_data.get("state") == "AWAITING_RESTORE_FILE" and message.document:
+        from handlers.backup_restore import handle_restore_upload
+        await handle_restore_upload(update, context)
+        return
+
+    if not db.is_admin(user.id):
+        await message.reply_text(db.get_text("upload_blocked"), parse_mode="HTML")
         return
 
     storage_channel_id = db.get_setting("storage_channel_id")
     if not storage_channel_id:
         await message.reply_text(
             "⚠️ The storage channel hasn't been configured yet. "
-            "An admin needs to set it via the Admin Panel → Settings → Storage Channel."
+            "Open ⚙️ Settings → 🔒 Storage Channel to set it up."
         )
         return
-
-    db.track_user(user.id, user.first_name or "", user.username or "")
 
     status_msg = await message.reply_text("⏳ <b>Processing...</b>\nSecuring your file...", parse_mode="HTML")
 
@@ -95,7 +107,6 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         link = f"https://t.me/{context.bot.username}?start={file_id}"
         final_text = f"✅ <b>Stored Successfully!</b>\n\n🔗 <b>Your Link:</b>\n<code>{link}</code>"
-        buttons = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Home", callback_data="home")]])
-        await status_msg.edit_text(final_text, reply_markup=buttons, parse_mode="HTML")
+        await status_msg.edit_text(final_text, reply_markup=kb.home_kb(), parse_mode="HTML")
     except Exception as e:
         await status_msg.edit_text(f"❌ <b>Error:</b> {e}", parse_mode="HTML")

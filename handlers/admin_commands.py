@@ -45,6 +45,12 @@ async def setstorage_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     db.set_setting("storage_channel_id", str(channel_id))
+    try:
+        chat = await context.bot.get_chat(channel_id)
+        invite_link = f"https://t.me/{chat.username}" if chat.username else await context.bot.export_chat_invite_link(channel_id)
+        db.upsert_known_chat(channel_id, chat.title or str(channel_id), chat.type, True, invite_link)
+    except Exception:
+        pass  # already verified reachable above; caching into known_chats is a nice-to-have, not required
     await update.message.reply_text(
         f"✅ Storage channel set to <code>{channel_id}</code>! {detail}", parse_mode="HTML"
     )
