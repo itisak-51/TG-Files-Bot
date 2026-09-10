@@ -47,7 +47,7 @@ EDITABLE_TEXTS = {
     ),
     "no_forward_warning": (
         "⚠️ No-Forward Warning (shown only when Content Protection is OFF)",
-        "⚠️ Don't forward this file anywhere else. It will be deleted once the timer ends.",
+        "⚠️ Forward this file anywhere else. It will be deleted once the timer ends.",
     ),
     "auto_deleted": (
         "🗑 Auto-Delete Notice",
