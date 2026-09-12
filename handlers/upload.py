@@ -1,10 +1,13 @@
 import asyncio
+import os
 import secrets
 
 from telegram import Update
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 import database as db
+import devuploads
 import keyboards as kb
 
 
@@ -26,6 +29,25 @@ def _detect_type(message) -> str:
     if message.sticker:
         return "sticker"
     return "file"
+
+
+def _tg_file_id(message, file_type: str) -> str:
+    """The underlying Telegram file_id for the media in this message —
+    needed to download it back down for mirroring to DevUploads."""
+    obj = {
+        "document": message.document,
+        "video": message.video,
+        "audio": message.audio,
+        "animation": message.animation,
+        "voice": message.voice,
+        "video_note": message.video_note,
+        "sticker": message.sticker,
+    }.get(file_type)
+    if obj is not None:
+        return obj.file_id
+    if file_type == "photo" and message.photo:
+        return message.photo[-1].file_id
+    return None
 
 
 def _display_name(message, file_type: str) -> str:
@@ -73,6 +95,13 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await message.reply_text(db.get_text("upload_blocked"), parse_mode="HTML")
         return
 
+    if context.user_data.get("state") != "AWAITING_UPLOAD":
+        await message.reply_text(
+            "ℹ️ I only store files when you're in the Upload menu — tap <b>📤 Upload File</b> first, "
+            "then send it.", parse_mode="HTML",
+        )
+        return
+
     storage_channel_id = db.get_setting("storage_channel_id")
     if not storage_channel_id:
         await message.reply_text(
@@ -106,7 +135,61 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await asyncio.sleep(0.4)
 
         link = f"https://t.me/{context.bot.username}?start={file_id}"
-        final_text = f"✅ <b>Stored Successfully!</b>\n\n🔗 <b>Your Link:</b>\n<code>{link}</code>"
+        dev_link = await _mirror_to_devuploads(context, status_msg, file_id, message, file_type, file_name)
+
+        final_text = f"✅ <b>Stored Successfully!</b>\n\n🔗 <b>Telegram Link:</b>\n<code>{link}</code>"
+        if dev_link:
+            final_text += f"\n\n🌐 <b>DevUploads Link:</b>\n<code>{dev_link}</code>"
         await status_msg.edit_text(final_text, reply_markup=kb.home_kb(), parse_mode="HTML")
     except Exception as e:
         await status_msg.edit_text(f"❌ <b>Error:</b> {e}", parse_mode="HTML")
+
+
+async def _mirror_to_devuploads(context, status_msg, file_id, message, file_type, file_name):
+    """Best-effort: if a DevUploads API key is configured, download the just
+    -stored file back down and push it up to DevUploads too, saving the
+    resulting link alongside the Telegram one. Never blocks or fails the
+    Telegram-side upload — DevUploads is a mirror, not the source of truth.
+    Returns the DevUploads link, or None if skipped/failed."""
+    dev_key = db.get_setting("devuploads_api_key")
+    if not dev_key:
+        return None
+
+    tg_file_id = _tg_file_id(message, file_type)
+    if not tg_file_id:
+        return None
+
+    await status_msg.edit_text("📤 <b>Mirroring to DevUploads...</b>", parse_mode="HTML")
+    local_path = f"/tmp/devupload_{file_id}_{file_name or 'file'}".replace(" ", "_")
+
+    try:
+        tg_file = await context.bot.get_file(tg_file_id)
+        await tg_file.download_to_drive(local_path)
+    except BadRequest as e:
+        # Bots can only download files up to 20MB via the Bot API — this is
+        # a Telegram-imposed limit, not something the bot can work around.
+        await status_msg.edit_text(f"⚠️ Skipped DevUploads mirror: {e}", parse_mode="HTML")
+        await asyncio.sleep(1.2)
+        return None
+    except Exception as e:
+        await status_msg.edit_text(f"⚠️ Skipped DevUploads mirror: {e}", parse_mode="HTML")
+        await asyncio.sleep(1.2)
+        return None
+
+    try:
+        result = await devuploads.upload_file(dev_key, local_path, filename=file_name)
+    finally:
+        try:
+            os.remove(local_path)
+        except FileNotFoundError:
+            pass
+
+    if not result.ok:
+        await status_msg.edit_text(f"⚠️ DevUploads mirror failed: {result.error}", parse_mode="HTML")
+        await asyncio.sleep(1.2)
+        return None
+
+    file_code = result.data.get("file_code")
+    dev_link = f"https://devuploads.com/{file_code}"
+    db.set_devuploads_info(file_id, file_code, dev_link)
+    return dev_link

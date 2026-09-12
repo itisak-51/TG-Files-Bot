@@ -24,7 +24,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         unjoined = await get_unjoined_channels(context, user.id)
         if unjoined:
             continue_data = f"checksubfile_{file_id}" if file_id else "checksubstart"
-            await prompt_join(update.message, unjoined, continue_data, is_callback=False)
+            await prompt_join(update.message, context, unjoined, continue_data)
             return
 
     if file_id:
@@ -35,6 +35,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if is_admin:
         context.user_data["level"] = "root"
+        context.user_data["leaf_active"] = None
         welcome = db.get_text("welcome").format(name=user.first_name)
         await update.message.reply_text(welcome, reply_markup=nav.reply_kb("root"), parse_mode="HTML")
     else:
@@ -60,6 +61,7 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ You are not authorized to use this command.")
         return
     context.user_data["level"] = "admin"
+    context.user_data["leaf_active"] = None
     await update.message.reply_text(
         nav.LEVEL_ARRIVAL_TEXT["admin"], reply_markup=nav.reply_kb("admin"), parse_mode="HTML",
     )

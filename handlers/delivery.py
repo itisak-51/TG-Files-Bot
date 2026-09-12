@@ -18,6 +18,7 @@ from telegram.error import BadRequest, Forbidden
 
 import database as db
 import keyboards as kb
+import ui_state
 
 logger = logging.getLogger(__name__)
 
@@ -43,16 +44,13 @@ async def is_user_subscribed(context, user_id: int) -> bool:
     return not await get_unjoined_channels(context, user_id)
 
 
-async def prompt_join(target, unjoined_channels: list, continue_data: str, is_callback: bool):
+async def prompt_join(target, context, unjoined_channels: list, continue_data: str):
     """Shows ONLY the channels still not joined — if the admin has 2
     channels configured and the user joined 1, only the remaining 1 is
     shown here, both in the button list and implicitly in the message."""
     text = db.get_text("forcesub_prompt")
     markup = kb.force_sub_kb(unjoined_channels, continue_data)
-    if is_callback:
-        await target.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
-    else:
-        await target.reply_text(text, reply_markup=markup, parse_mode="HTML")
+    await ui_state.show(target, context, text, markup)
 
 
 async def deliver_file(context, chat_target, user_id: int, file_id: str, edit_status: bool):
@@ -66,7 +64,7 @@ async def deliver_file(context, chat_target, user_id: int, file_id: str, edit_st
             await chat_target.reply_text(text)
         return
 
-    _fid, channel_msg_id, _uploader, _ftype, _fname, caption, _uploaded_at = row
+    _fid, channel_msg_id, _uploader, _ftype, _fname, caption, _uploaded_at, _devcode, _devlink = row
     storage_channel_id = db.get_setting("storage_channel_id")
     if not storage_channel_id:
         text = "❌ Storage channel is not configured yet. Ask an admin to set it up."
@@ -111,6 +109,14 @@ async def deliver_file(context, chat_target, user_id: int, file_id: str, edit_st
 
     auto_delete_seconds = int(db.get_setting("auto_delete_seconds", "300") or 0)
 
+    # No "✅ Success! ... Home" confirmation — for a receive-only bot that's
+    # just noise. The transient "fetching" status is cleared, and the file
+    # (already delivered above) plus its timer message are all the user sees.
+    try:
+        await context.bot.delete_message(chat_id=user_id, message_id=status_msg_id)
+    except Exception:
+        pass
+
     if auto_delete_seconds > 0:
         timer_text = f"⏳ <b>{auto_delete_seconds}s</b> remaining"
         if not protect:
@@ -118,17 +124,6 @@ async def deliver_file(context, chat_target, user_id: int, file_id: str, edit_st
             # ON, so the explicit warning only needs to show when it's OFF.
             timer_text += f"\n\n{db.get_text('no_forward_warning')}"
         timer_msg = await context.bot.send_message(user_id, timer_text, parse_mode="HTML")
-        success_text = f"{db.get_text('delivered')}\n⏳ Auto-delete timer started."
-    else:
-        timer_msg = None
-        success_text = db.get_text("delivered")
-
-    await context.bot.edit_message_text(
-        chat_id=user_id, message_id=status_msg_id, text=success_text,
-        reply_markup=kb.home_kb(), parse_mode="HTML",
-    )
-
-    if timer_msg:
         asyncio.create_task(
             run_countdown(context, user_id, timer_msg.message_id, sent_file.message_id, auto_delete_seconds, protect)
         )
