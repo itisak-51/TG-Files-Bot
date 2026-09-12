@@ -15,11 +15,16 @@ A secure, advanced file-store & delivery bot with:
 - 🗄 Files Management — browse stored files **by filename**, get a link, remove a file (also deletes it from the storage channel), or reissue its link ID
 - 💾 **Backup / Restore / Destroy** — Backup Data snapshots all metadata + config (never the file bytes — those stay on Telegram) as a downloadable `.db`; Restore Data loads a backup back in, picking up exactly where it left off, even on a brand-new host; Destroy Data wipes everything (including deleting the actual messages from the storage channel) back to a fresh install
 - 🎛 **Edit Mode** — welcome message, help/about text, warnings, and prompts are all editable live from Settings, not hardcoded
+- 🌐 **DevUploads.com mirroring** — every upload is automatically mirrored to DevUploads too (both links saved and shown); manage your DevUploads account, files, and folders — rename, delete, remote-upload — directly from the bot. API key lives in `.env` or is set/changed live from the bot itself
+- 🎯 **Exactly one live menu at a time** — opening a new picker/action screen always retires whichever one was open before, so a stale "Remove File" screen from two menus ago can never accidentally delete something you're not even looking at anymore
+- ⬅️ **True one-step Back** — Back always closes whatever's immediately open (a picker, a prompt) and lands on its own hub first, never skipping past it to a level above
 - 💾 SQLite database (reliable, atomic, single-file, easy to back up)
 - 🔁 Two-layer auto-restart (in-process backoff loop + systemd `Restart=always`)
 - 🔒 No secrets in code — everything sensitive lives in `.env`
 
 > **Note on auto-detected channels:** Telegram's Bot API has no "list every chat I'm in" endpoint. The bot learns which channels/groups it administers two ways: passively, the moment it's promoted/demoted anywhere while running; and actively, the instant you point it at a chat by forwarding a message or typing an ID — that chat gets verified live and remembered from then on. If a channel doesn't show up in a picker yet, forward one message from it (or use 🔄 Refresh Detected Channels) and it'll appear immediately.
+
+> **Note on DevUploads:** DevUploads runs on the XFileSharingPro (XFS) script family. `account/info`, `account/stats`, `upload/server`, and `file/list` were verified directly against devuploads.com; every other endpoint follows that same well-established convention. Two endpoints (deleting a file or folder) aren't in the base XFS reference docs — they're extremely common additions on sites like this one, but if either ever errors for you, that's the one pair to double-check against your account's own API panel. Everything lives in one file (`devuploads.py`), one method per endpoint, so fixing one thing never touches anything else.
 
 ---
 

@@ -91,6 +91,8 @@ def init_db():
         _ensure_column(cur, "users", "username", "TEXT")
         _ensure_column(cur, "files", "file_name", "TEXT")
         _ensure_column(cur, "files", "caption", "TEXT")
+        _ensure_column(cur, "files", "devuploads_code", "TEXT")
+        _ensure_column(cur, "files", "devuploads_link", "TEXT")
 
         # Seed owner as permanent admin
         cur.execute(
@@ -102,6 +104,7 @@ def init_db():
             "auto_delete_seconds": str(config.DEFAULT_AUTO_DELETE_SECONDS),
             "protect_content": config.DEFAULT_PROTECT_CONTENT,
             "storage_channel_id": "",
+            "devuploads_api_key": config.DEVUPLOADS_API_KEY,
         }
         for k, v in defaults.items():
             cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
@@ -338,7 +341,8 @@ def add_file(file_id: str, channel_msg_id: int, uploader_id: int, file_type: str
 def get_file(file_id: str):
     with _cursor() as cur:
         return cur.execute(
-            "SELECT file_id, channel_msg_id, uploader_id, file_type, file_name, caption, uploaded_at "
+            "SELECT file_id, channel_msg_id, uploader_id, file_type, file_name, caption, uploaded_at, "
+            "devuploads_code, devuploads_link "
             "FROM files WHERE file_id=?",
             (file_id,),
         ).fetchone()
@@ -350,24 +354,30 @@ def delete_file(file_id: str) -> bool:
         return cur.rowcount > 0
 
 
+def set_devuploads_info(file_id: str, code: str, link: str):
+    with _cursor() as cur:
+        cur.execute("UPDATE files SET devuploads_code=?, devuploads_link=? WHERE file_id=?", (code, link, file_id))
+
+
 def regenerate_file_id(old_file_id: str):
     """Issues a brand-new share link for the same stored file, and retires
     the old one (its link stops working). Returns the new file_id, or None
     if old_file_id doesn't exist."""
     with _cursor() as cur:
         row = cur.execute(
-            "SELECT channel_msg_id, uploader_id, file_type, file_name, caption FROM files WHERE file_id=?",
+            "SELECT channel_msg_id, uploader_id, file_type, file_name, caption, devuploads_code, devuploads_link "
+            "FROM files WHERE file_id=?",
             (old_file_id,),
         ).fetchone()
         if not row:
             return None
-        channel_msg_id, uploader_id, file_type, file_name, caption = row
+        channel_msg_id, uploader_id, file_type, file_name, caption, dev_code, dev_link = row
         new_id = f"{channel_msg_id}{secrets.token_hex(3)}"
         cur.execute("DELETE FROM files WHERE file_id=?", (old_file_id,))
         cur.execute(
-            "INSERT INTO files (file_id, channel_msg_id, uploader_id, file_type, file_name, caption, uploaded_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (new_id, channel_msg_id, uploader_id, file_type, file_name, caption, int(time.time())),
+            "INSERT INTO files (file_id, channel_msg_id, uploader_id, file_type, file_name, caption, "
+            "uploaded_at, devuploads_code, devuploads_link) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (new_id, channel_msg_id, uploader_id, file_type, file_name, caption, int(time.time()), dev_code, dev_link),
         )
         return new_id
 
@@ -387,6 +397,17 @@ def list_all_files() -> list:
     with _cursor() as cur:
         return cur.execute(
             "SELECT file_id, file_type, file_name, uploaded_at FROM files ORDER BY uploaded_at DESC"
+        ).fetchall()
+
+
+def list_devuploads_mirrored_files() -> list:
+    """Row = (file_id, file_name, devuploads_code) for files that have been
+    mirrored to DevUploads — the pool shown in its Rename/Delete pickers."""
+    with _cursor() as cur:
+        return cur.execute(
+            "SELECT file_id, file_name, devuploads_code FROM files "
+            "WHERE devuploads_code IS NOT NULL AND devuploads_code != '' "
+            "ORDER BY uploaded_at DESC"
         ).fetchall()
 
 

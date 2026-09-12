@@ -47,6 +47,31 @@ def confirm_kb(confirm_data: str, cancel_data: str):
     ])
 
 
+# ---------------- DevUploads ----------------
+
+def devuploads_files_menu_kb():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📋 List (Live from DevUploads)", callback_data="devfiles_list")],
+        [InlineKeyboardButton("✏️ Rename a Mirrored File", callback_data="devfiles_rename")],
+        [InlineKeyboardButton("🗑 Delete a Mirrored File", callback_data="devfiles_delete")],
+    ])
+
+
+def devuploads_folders_menu_kb():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📋 List Folders", callback_data="devfolders_list")],
+        [InlineKeyboardButton("➕ Create Folder", callback_data="devfolders_create")],
+        [InlineKeyboardButton("🗑 Delete a Folder", callback_data="devfolders_delete")],
+    ])
+
+
+def devuploads_file_pick_kb(files, pick_prefix: str, page_prefix: str, page: int = 0):
+    """files: list of (file_id, file_name, devuploads_code) — our own
+    tracked files that have a DevUploads mirror."""
+    items = [(fid, f"📄 {fname or fid}") for fid, fname, _code in files]
+    return _paginated_kb(items, pick_prefix, page_prefix, page, None)
+
+
 # ---------------- Storage / Force-Sub channel pickers ----------------
 
 def storage_pick_kb(channels, page: int = 0):

@@ -32,3 +32,9 @@ OWNER_ID = int(OWNER_ID_RAW)
 # Default settings written into the DB on first run (editable live via /admin after that)
 DEFAULT_AUTO_DELETE_SECONDS = 300  # 5 minutes
 DEFAULT_PROTECT_CONTENT = "0"  # "1" = forwarding/saving disabled on delivered files
+
+# Optional. If set, every uploaded file is also mirrored to DevUploads.com.
+# Not required to run the bot — leave blank to skip DevUploads entirely.
+# Once the bot is running, this can be viewed/changed live from
+# Admin Panel -> Settings -> DevUploads without touching .env or restarting.
+DEVUPLOADS_API_KEY = os.getenv("DEVUPLOADS_API_KEY", "").strip()

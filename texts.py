@@ -37,17 +37,13 @@ EDITABLE_TEXTS = {
         "⏳ Fetching Status",
         "⏳ <b>Fetching your file from the secure vault...</b>",
     ),
-    "delivered": (
-        "✅ Delivered Status",
-        "✅ <b>Success!</b> Your file is above.",
-    ),
     "brand_label": (
         "🏷 Brand Label (above each delivered file, blank = off)",
         "",
     ),
     "no_forward_warning": (
         "⚠️ No-Forward Warning (shown only when Content Protection is OFF)",
-        "⚠️ Forward this file anywhere else. It will be deleted once the timer ends.",
+        "⚠️ Don't forward this file anywhere else. It will be deleted once the timer ends.",
     ),
     "auto_deleted": (
         "🗑 Auto-Delete Notice",

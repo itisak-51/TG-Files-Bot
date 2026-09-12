@@ -26,6 +26,7 @@ LEVEL_PARENT = {
     "admins": "admin",
     "files": "admin",
     "backup": "admin",
+    "devuploads": "admin",
 }
 
 LEVEL_BUTTONS = {
@@ -38,7 +39,7 @@ LEVEL_BUTTONS = {
         ["📊 Statistics", "⚙️ Settings"],
         ["👥 Users", "🛡 Admins"],
         ["📢 Broadcast", "🗄 Files Management"],
-        ["💾 Backup"],
+        ["💾 Backup", "🌐 DevUploads"],
         [BACK],
     ],
     "settings": [
@@ -72,6 +73,13 @@ LEVEL_BUTTONS = {
         ["🔥 Destroy Data"],
         [BACK],
     ],
+    "devuploads": [
+        ["📊 Account Info"],
+        ["🔑 Set API Key"],
+        ["📁 Manage Files", "📂 Manage Folders"],
+        ["🔗 Remote Upload"],
+        [BACK],
+    ],
 }
 
 LEVEL_ARRIVAL_TEXT = {
@@ -83,6 +91,7 @@ LEVEL_ARRIVAL_TEXT = {
     "admins": "🛡 <b>Manage Admins</b>",
     "files": "🗄 <b>Files Management</b>",
     "backup": "💾 <b>Backup &amp; Restore</b>\n\nYour local data (metadata + config only — not the files themselves, those stay on Telegram) can be backed up and restored here.",
+    "devuploads": "🌐 <b>DevUploads</b>\n\nManage your DevUploads.com account, files, and folders directly from here.",
 }
 
 
