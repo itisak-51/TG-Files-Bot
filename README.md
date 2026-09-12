@@ -76,8 +76,8 @@ SSH into your VPS as **root** (this whole guide assumes a root shell — no `sud
 apt update && apt install -y git
 
 # 2. Clone your copy of this repository
-git clone https://github.com/YOUR_USERNAME/telegram-filestore-bot.git
-cd telegram-filestore-bot
+git clone https://github.com/itisak-51/TG-Files-Bot.git
+cd TG-Files-Bot
 
 # 3. Run the installer (creates a virtualenv, installs dependencies, makes .env)
 chmod +x install.sh
